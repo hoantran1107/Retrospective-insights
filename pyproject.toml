@@ -1,0 +1,68 @@
+[project]
+name = "retrospective-insights-bot"
+version = "0.1.0"
+description = "AI-powered bot that analyzes Jira metrics to generate retrospective insights"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "scipy>=1.11.0",
+    "matplotlib>=3.7.0",
+    "seaborn>=0.12.0",
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "click>=8.1.0",
+    "jinja2>=3.1.0",
+    "pyyaml>=6.0",
+    "plotly>=5.15.0",
+    "kaleido>=0.2.1",
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.0.0",
+    "async-lru>=2.0.5",
+    "langchain",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.11.0",
+    "black>=23.7.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.5.0",
+    "pre-commit>=3.3.0",
+    "httpx>=0.25.0",
+]
+
+[project.scripts]
+retro-bot = "retrospective_insights.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/retrospective_insights"]
+
+[tool.pytest.ini_options]
+minversion = "7.4"
+addopts = "-ra -q --cov=retrospective_insights --cov-report=term-missing"
+testpaths = ["tests"]
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
