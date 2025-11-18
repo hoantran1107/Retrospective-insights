@@ -4,12 +4,18 @@ This module uses AI/LLM to analyze metrics trends and patterns to generate
 evidence-backed hypotheses and actionable experiments for retrospectives.
 """
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, List
 
-from openai import AzureOpenAI, OpenAI
+from openai import AzureOpenAI, OpenAI, AsyncAzureOpenAI
+from typing import TypeVar, Generic, Type
+from pydantic import BaseModel
+
+T = TypeVar("T", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +34,12 @@ class Hypothesis:
     supporting_metrics: list[str]
 
 
+class HypothesisReponseModel(BaseModel):
+    """Pydantic model for parsing hypothesis response."""
+
+    hypotheses: list[Hypothesis]
+
+
 @dataclass
 class Experiment:
     """Represents a suggested experiment for the next sprint."""
@@ -43,6 +55,12 @@ class Experiment:
     duration: str  # e.g., "1 sprint", "2 weeks"
 
 
+class ExperimentResponseModel(BaseModel):
+    """Pydantic model for parsing experiment response."""
+
+    experiment: Experiment  # Will be parsed into Experiment dataclass
+
+
 @dataclass
 class FacilitationNote:
     """Represents facilitation notes for retrospective meetings."""
@@ -51,6 +69,12 @@ class FacilitationNote:
     agenda_items: list[str]
     discussion_prompts: list[str]
     action_item_templates: list[str]
+
+
+class FacilitationResponseModel(BaseModel):
+    """Pydantic model for parsing facilitation notes response."""
+
+    facilitation_notes: FacilitationNote
 
 
 class AIInsightsGenerator:
@@ -84,7 +108,7 @@ class AIInsightsGenerator:
         if azure_endpoint:
             # Use Azure OpenAI
 
-            self.client = AzureOpenAI(
+            self.client = AsyncAzureOpenAI(
                 api_key=api_key,
                 azure_endpoint=azure_endpoint,
                 api_version=api_version,
@@ -104,7 +128,9 @@ class AIInsightsGenerator:
         self.max_tokens = max_tokens
         self.temperature = temperature
 
-    def generate_hypotheses(self, analysis_results: dict[str, Any]) -> list[Hypothesis]:
+    async def generate_hypotheses_async(
+        self, analysis_results: dict[str, Any]
+    ) -> list[Hypothesis]:
         """Generate evidence-backed hypotheses from analysis results.
 
         Args:
@@ -122,7 +148,9 @@ class AIInsightsGenerator:
 
             # Generate hypotheses using AI
             prompt = self._create_hypothesis_prompt(analysis_summary)
-            response = self._call_openai(prompt)
+            response = await self._call_openai_async(
+                prompt, response_format=HypothesisReponseModel
+            )
 
             # Parse and validate response
             hypotheses = self._parse_hypotheses_response(response)
@@ -132,54 +160,40 @@ class AIInsightsGenerator:
 
         except Exception as e:
             logger.error(f"Failed to generate hypotheses: {e}")
-            return self._create_fallback_hypotheses(analysis_results)
+            raise
 
-    def suggest_experiments(self, hypotheses: list[Hypothesis]) -> list[Experiment]:
-        """Suggest actionable experiments based on hypotheses.
+    async def suggest_experiments_async(
+        self, hypotheses: list[Hypothesis]
+    ) -> list[Experiment]:
+        """Generate experiments in parallel for all hypotheses."""
 
-        Args:
-            hypotheses: List of generated hypotheses
-
-        Returns:
-            List of suggested experiments
-
-        """
-        logger.info(f"Suggesting experiments for {len(hypotheses)} hypotheses")
-
-        experiments = []
-
-        for hypothesis in hypotheses:
+        async def generate_single_experiment(
+            hypothesis: Hypothesis,
+        ) -> Experiment | None:
             try:
-                # Generate experiment for each hypothesis
                 prompt = self._create_experiment_prompt(hypothesis)
-                response = self._call_openai(prompt)
-
-                experiment = self._parse_experiment_response(response, hypothesis.id)
-                if experiment:
-                    experiments.append(experiment)
-
-            except Exception as e:
-                logger.error(
-                    f"Failed to generate experiment for hypothesis {hypothesis.id}: {e}",
+                response = await self._call_openai_async(
+                    prompt, ExperimentResponseModel
                 )
-                # Create fallback experiment
-                fallback = self._create_fallback_experiment(hypothesis)
-                if fallback:
-                    experiments.append(fallback)
+                return self._parse_experiment_response(response, hypothesis.id)
+            except Exception as e:
+                logger.error(f"Failed for {hypothesis.id}: {e}")
+                return self._create_fallback_experiment(hypothesis)
 
-        # Sort by confidence and impact
+        # ✅ Run all async functions in parallel
+        experiments = await asyncio.gather(
+            *[generate_single_experiment(h) for h in hypotheses]
+        )
+
+        # Filter, sort, return
+        experiments = [e for e in experiments if e is not None]
         experiments.sort(
             key=lambda e: self._calculate_experiment_priority(e, hypotheses),
             reverse=True,
         )
+        return experiments[:3]
 
-        # Return top 3 experiments
-        top_experiments = experiments[:3]
-        logger.info(f"Selected {len(top_experiments)} top experiments")
-
-        return top_experiments
-
-    def generate_facilitation_notes(
+    async def generate_facilitation_notes_async(
         self,
         hypotheses: list[Hypothesis],
         experiments: list[Experiment],
@@ -198,7 +212,7 @@ class AIInsightsGenerator:
 
         try:
             prompt = self._create_facilitation_prompt(hypotheses, experiments)
-            response = self._call_openai(prompt)
+            response = await self._call_openai_async(prompt, FacilitationResponseModel)
 
             notes = self._parse_facilitation_response(response)
             logger.info("Successfully generated facilitation notes")
@@ -359,19 +373,6 @@ Design an experiment that:
 4. Measures the right metrics
 5. Has low risk and effort
 
-Format your response as JSON:
-{{
-  "experiment": {{
-    "title": "Brief experiment title",
-    "description": "Detailed experiment description",
-    "success_criteria": ["Criterion 1", "Criterion 2"],
-    "implementation_steps": ["Step 1", "Step 2", "Step 3"],
-    "metrics_to_track": ["metric1", "metric2"],
-    "estimated_effort": "low|medium|high",
-    "duration": "1 sprint|2 weeks|etc"
-  }}
-}}
-
 Make it practical and immediately actionable for a Scrum team.
 """
 
@@ -403,16 +404,6 @@ Create facilitation notes including:
 3. Discussion prompts to engage team members
 4. Action item templates for experiment planning
 
-Format as JSON:
-{{
-  "facilitation_notes": {{
-    "suggested_questions": ["Question 1", "Question 2"],
-    "agenda_items": ["Item 1", "Item 2"],
-    "discussion_prompts": ["Prompt 1", "Prompt 2"],
-    "action_item_templates": ["Template 1", "Template 2"]
-  }}
-}}
-
 Focus on:
 - Questions that encourage team reflection
 - Collaborative validation of insights
@@ -420,23 +411,34 @@ Focus on:
 - Team ownership of improvements
 """
 
-    def _call_openai(self, prompt: str) -> str:
+    async def _call_openai_async(
+        self, prompt: str, response_format: type[T] | None = None
+    ) -> str:
         """Make API call to OpenAI and return response."""
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
+            # Build request parameters
+            request_params = {
+                "model": self.model,
+                "messages": [
                     {
                         "role": "system",
-                        "content": "You are an expert Agile coach and data analyst specializing in team performance metrics and retrospective facilitation.",
+                        "content": "You are an expert Agile coach and data analyst.",
                     },
                     {"role": "user", "content": prompt},
                 ],
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-            )
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+            }
 
-            return response.choices[0].message.content
+            # Add structured output if Pydantic model provided
+            if response_format is not None:
+                request_params["response_format"] = response_format
+                response = await self.client.chat.completions.parse(**request_params)
+                return response.choices[0].message.content  # Type: T
+
+            else:
+                response = await self.client.chat.completions.create(**request_params)
+                return response.choices[0].message.content  # Type: str
 
         except Exception as e:
             logger.error(f"OpenAI API call failed: {e}")

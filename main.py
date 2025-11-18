@@ -29,7 +29,10 @@ class RetrospectiveInsightsBot:
     """AI Bot for generating retrospective insights from team metrics."""
 
     def __init__(
-        self, team_filter: str = None, team_happiness_name: str = None
+        self,
+        team_filter: str = None,
+        team_happiness_name: str = None,
+        project_name: str = None,
     ) -> None:
         """Initialize the retrospective insights bot.
 
@@ -43,6 +46,7 @@ class RetrospectiveInsightsBot:
         self.report_generator = None
         self.team_filter = team_filter
         self.team_happiness_name = team_happiness_name
+        self.project_name = project_name
 
     def initialize_components(self) -> None:
         """Initialize all components."""
@@ -94,10 +98,7 @@ class RetrospectiveInsightsBot:
         else:
             logger.info("📊 Fetching data for last 5 months (All teams)...")
         # fetch raw data from API
-        # raw_metrics = await self.data_fetcher.fetch_all_metrics()
-        # Load data from file
-        with open("raw_data.json", encoding="utf-8") as f:
-            raw_metrics = json.load(f)
+        raw_metrics = await self.data_fetcher.fetch_all_metrics()
 
         logger.info(
             f"⏰ Time window: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')} (5 months)",
@@ -314,11 +315,13 @@ class RetrospectiveInsightsBot:
 
         # Generate AI insights
         try:
-            hypotheses = self.ai_generator.generate_hypotheses(summary)
-            experiments = self.ai_generator.suggest_experiments(hypotheses)
-            facilitation_notes = self.ai_generator.generate_facilitation_notes(
-                hypotheses,
-                experiments,
+            hypotheses = await self.ai_generator.generate_hypotheses_async(summary)
+            experiments = await self.ai_generator.suggest_experiments_async(hypotheses)
+            facilitation_notes = (
+                await self.ai_generator.generate_facilitation_notes_async(
+                    hypotheses,
+                    experiments,
+                )
             )
 
             logger.info(
@@ -345,6 +348,50 @@ class RetrospectiveInsightsBot:
             },
         }
 
+    async def enrich_with_jira_agent(
+        self,
+        insights: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Enrich insights using AI agent with Jira MCP access.
+
+        Args:
+            insights: Existing insights from analysis
+
+        Returns:
+            Enriched insights with Jira context
+
+        """
+        from src.agent.agent import enrich_insights_with_jira
+
+        logger.info("🤖 Enriching insights with Jira Agent (MCP)...")
+
+        team_name = self.project_name if self.project_name else "All Teams"
+        max_retries = 3
+        retry_delay = 2  # seconds
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(
+                    f"🔄 Attempt {attempt}/{max_retries} to enrich with Jira..."
+                )
+                enriched = await enrich_insights_with_jira(insights, team_name)
+                logger.info("✅ Insights enriched with Jira data")
+                return enriched
+            except Exception as e:
+                if attempt < max_retries:
+                    logger.warning(
+                        f"⚠️ Jira enrichment attempt {attempt} failed: {e}. Retrying in {retry_delay}s..."
+                    )
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    logger.error(
+                        f"❌ Jira enrichment failed after {max_retries} attempts: {e}"
+                    )
+                    return insights  # Return original if all retries fail
+
+        return insights
+
     async def generate_report(self, insights: dict[str, Any]) -> str:
         """Generate comprehensive report."""
         logger.info("📝 Generating report...")
@@ -355,6 +402,16 @@ class RetrospectiveInsightsBot:
         # Generate charts
         charts = self.report_generator.generate_charts(insights["analysis"]["summary"])
 
+        # Extract Jira enrichment data
+        jira_enrichment = insights.get("jira_enrichment", {})
+        jira_context = {
+            "agent_analysis": jira_enrichment.get(
+                "agent_analysis", "No Jira enrichment available"
+            ),
+            "data_source": jira_enrichment.get("data_source", "N/A"),
+            "enriched": bool(jira_enrichment),
+        }
+
         # Create report
         report_content = self.report_generator.create_report(
             analysis_results=insights["analysis"]["summary"],
@@ -363,6 +420,7 @@ class RetrospectiveInsightsBot:
             facilitation_notes=insights["ai_insights"]["facilitation_notes"],
             team_name=team_name,
             format_type="html",
+            jira_context=jira_context,
         )
 
         # Export to file
@@ -394,6 +452,8 @@ class RetrospectiveInsightsBot:
 
             # Generate insights
             insights = await self.generate_insights(metrics_data)
+            # 🆕 ENRICH WITH JIRA AGENT (MCP)
+            insights = await self.enrich_with_jira_agent(insights)
 
             # Generate report
             report_path = await self.generate_report(insights)

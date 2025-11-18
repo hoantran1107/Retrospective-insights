@@ -122,6 +122,7 @@ class RetrospectiveReportGenerator:
         facilitation_notes: FacilitationNote,
         team_name: str = "Team",
         format_type: str = "markdown",
+        jira_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a comprehensive retrospective report.
 
@@ -132,6 +133,7 @@ class RetrospectiveReportGenerator:
             facilitation_notes: Facilitation notes for Scrum Masters
             team_name: Name of the team
             format_type: Output format ('markdown', 'html', 'pdf')
+            jira_context: Optional Jira enrichment data from MCP agent
 
         Returns:
             Dictionary with report content and metadata
@@ -160,6 +162,7 @@ class RetrospectiveReportGenerator:
             "facilitation_notes": facilitation_notes,
             "charts": charts,
             "key_insights": analysis_results.get("key_insights", []),
+            "jira_context": jira_context or {},
         }
 
         # Generate report based on format
@@ -587,7 +590,29 @@ class RetrospectiveReportGenerator:
 - **Significant Changes:** {data["metrics_overview"]["significant_changes"]}
 - **Analysis Period:** {data["metrics_overview"]["analysis_period"]}
 
-## Top 3 Hypotheses
+## Jira Context & Enrichment
+
+"""
+
+        if data.get("jira_context"):
+            jira_ctx = data["jira_context"]
+
+            if jira_ctx.get("agent_analysis"):
+                md += f"**Agent Analysis:**\n\n{jira_ctx['agent_analysis']}\n\n"
+
+            if jira_ctx.get("related_issues"):
+                md += "**Related Jira Issues:**\n\n"
+                for issue in jira_ctx["related_issues"][:5]:
+                    md += f"- [{issue.get('key', 'N/A')}] {issue.get('summary', 'N/A')} - Status: {issue.get('status', 'N/A')}\n"
+                md += "\n"
+
+            if jira_ctx.get("sprint_context"):
+                sprint = jira_ctx["sprint_context"]
+                md += f"**Sprint Context:** {sprint.get('name', 'N/A')} ({sprint.get('state', 'N/A')})\n\n"
+        else:
+            md += "*No Jira enrichment data available*\n\n"
+
+        md += """## Top 3 Hypotheses
 
 """
 
@@ -706,10 +731,41 @@ class RetrospectiveReportGenerator:
         for insight in data["key_insights"]:
             html += f"        <li>{insight}</li>\n"
 
-        html += f"""    </ul>
+        html += """    </ul>
     
+    <h2>Jira Context & Enrichment</h2>
+"""
+
+        if data.get("jira_context"):
+            jira_ctx = data["jira_context"]
+            html += '    <div class="jira-context" style="background-color: #e8f4f8; padding: 15px; margin: 10px 0; border-left: 4px solid #17a2b8;">\n'
+
+            if jira_ctx.get("agent_analysis"):
+                html += f"        <h3>Agent Analysis</h3>\n"
+                html += f"        <p>{jira_ctx['agent_analysis']}</p>\n"
+
+            if jira_ctx.get("related_issues"):
+                html += "        <h3>Related Jira Issues</h3>\n"
+                html += "        <ul>\n"
+                for issue in jira_ctx["related_issues"][:5]:
+                    key = issue.get("key", "N/A")
+                    summary = issue.get("summary", "N/A")
+                    status = issue.get("status", "N/A")
+                    html += f"            <li><strong>[{key}]</strong> {summary} - <em>Status: {status}</em></li>\n"
+                html += "        </ul>\n"
+
+            if jira_ctx.get("sprint_context"):
+                sprint = jira_ctx["sprint_context"]
+                html += f"        <h3>Sprint Context</h3>\n"
+                html += f"        <p><strong>{sprint.get('name', 'N/A')}</strong> ({sprint.get('state', 'N/A')})</p>\n"
+
+            html += "    </div>\n"
+        else:
+            html += "    <p><em>No Jira enrichment data available</em></p>\n"
+
+        html += f"""    
     <h2>Visualizations</h2>
-    {charts_html}
+    {charts_html}"
     
     <h2>Top 3 Hypotheses</h2>
 """

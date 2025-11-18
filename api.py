@@ -50,6 +50,12 @@ class AnalysisRequest(BaseModel):
         example="Gridsz Data",
     )
 
+    project_name: str | None = Field(
+        None,
+        description="Project name to filter data (e.g., 'Project X'). If not provided, analyzes all projects.",
+        example="GRIDSZDT",
+    )
+
 
 class AnalysisResponse(BaseModel):
     """Response model for analysis initiation."""
@@ -87,7 +93,10 @@ class TaskStatus(BaseModel):
 
 # Background task function
 async def run_analysis_task(
-    task_id: str, team_filter: str | None = None, team_happiness_name: str | None = None
+    task_id: str,
+    team_filter: str | None = None,
+    team_happiness_name: str | None = None,
+    project_name: str | None = None,
 ) -> None:
     """Run the analysis in the background."""
     try:
@@ -101,7 +110,9 @@ async def run_analysis_task(
 
         # Create bot instance and run analysis
         bot = RetrospectiveInsightsBot(
-            team_filter=team_filter, team_happiness_name=team_happiness_name
+            team_filter=team_filter,
+            team_happiness_name=team_happiness_name,
+            project_name=project_name,
         )
         report_path = await bot.run_complete_analysis()
 
@@ -192,7 +203,11 @@ async def create_analysis(
 
     # Add background task
     background_tasks.add_task(
-        run_analysis_task, task_id, request.team_filter, request.team_happiness_name
+        run_analysis_task,
+        task_id,
+        request.team_filter,
+        request.team_happiness_name,
+        request.project_name,
     )
 
     logger.info(
